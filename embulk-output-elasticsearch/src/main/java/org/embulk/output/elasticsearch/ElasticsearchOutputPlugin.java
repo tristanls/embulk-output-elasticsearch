@@ -1,9 +1,13 @@
 package org.embulk.output.elasticsearch;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 
 import org.elasticsearch.action.bulk.BulkItemResponse;
 import org.elasticsearch.action.bulk.BulkProcessor;
@@ -12,14 +16,9 @@ import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.action.index.IndexRequest;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.Requests;
-import org.elasticsearch.client.transport.TransportClient;
-import org.elasticsearch.common.settings.Settings;
-import org.elasticsearch.common.transport.InetSocketTransportAddress;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 
 import org.embulk.config.Config;
 import org.embulk.config.ConfigDefault;
@@ -60,6 +59,10 @@ public class ElasticsearchOutputPlugin
     public interface PluginTask
             extends Task
     {
+        @Config("version")
+        @ConfigDefault("\"2\"")
+        public String getVersion();
+
         @Config("nodes")
         public List<NodeAddressTask> getNodes();
 
@@ -103,7 +106,6 @@ public class ElasticsearchOutputPlugin
                                   int processorCount, Control control)
     {
         final PluginTask task = config.loadConfig(PluginTask.class);
-
         // confirm that a client can be initialized
         try (Client client = createClient(task)) {
         }
@@ -135,20 +137,46 @@ public class ElasticsearchOutputPlugin
 
     private Client createClient(final PluginTask task)
     {
-        //  @see http://www.elasticsearch.org/guide/en/elasticsearch/client/java-api/current/client.html
-        Settings settings = Settings.settingsBuilder()
-                .put("cluster.name", task.getClusterName())
-                .build();
-        TransportClient client = TransportClient.builder().settings(settings).build();
-        List<NodeAddressTask> nodes = task.getNodes();
-        for (NodeAddressTask node : nodes) {
-            try {
-                client.addTransportAddress(new InetSocketTransportAddress(InetAddress.getByName(node.getHost()), node.getPort()));
-            } catch (UnknownHostException e) {
-                Throwables.propagate(e);
+        String version = task.getVersion();
+        Client client = null;
+        Class<?> clazz = null;
+        Object obj = null;
+        try {
+            switch (version) {
+                case "1":
+                    // version 1.x
+                    clazz = Class.forName("org.embulk.output.elasticsearch.ElasticsearchOutputPlugin_1x");
+                    break;
+                default:
+                    // version 2.x
+                    clazz = Class.forName("org.embulk.output.elasticsearch.ElasticsearchOutputPlugin_2x");
             }
+            obj = clazz.newInstance();
+        } catch (ClassNotFoundException | InstantiationException | IllegalAccessException e) {
+            Throwables.propagate(e);
+        }
+
+        try {
+            log.info(String.format("creating TransportClient for Elasticsearch %s", version));
+            Method method = clazz.getMethod("createClient", String.class, List.class);
+            client = (Client) method.invoke(obj, task.getClusterName(), getNodeList(task.getNodes()));
+        } catch (NoSuchMethodException | IllegalAccessException | InvocationTargetException e) {
+            Throwables.propagate(e);
         }
         return client;
+    }
+
+    // convert to List for ElasticsearchOutputPlugin_xx classes.
+    private List<HashMap<String, String>> getNodeList(List<NodeAddressTask> nodes)
+    {
+        List<HashMap<String, String>> nodeList = new ArrayList<HashMap<String, String>>();
+        for (NodeAddressTask node : nodes) {
+            HashMap<String, String> nodeInfo= new HashMap<String, String>();
+            nodeInfo.put("Host", node.getHost());
+            nodeInfo.put("Port", String.valueOf(node.getPort()));
+            nodeList.add(nodeInfo);
+        }
+        return nodeList;
     }
 
     private BulkProcessor newBulkProcessor(final PluginTask task, final Client client)

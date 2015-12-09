@@ -1,0 +1,4 @@
+dependencies {
+    // should use older than that ElasticsearchOutputPlugin_(1x|2x)  uses
+    compile 'org.elasticsearch:elasticsearch:1.5.2'
+}

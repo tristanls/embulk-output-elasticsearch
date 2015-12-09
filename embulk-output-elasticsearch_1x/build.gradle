@@ -1,0 +1,6 @@
+dependencies {
+    compile project(':embulk-output-elasticsearch')
+
+    // should use newer than that ElasticsearchOutputPlugin uses
+    compile 'org.elasticsearch:elasticsearch:1.5.2'
+}
